@@ -121,7 +121,7 @@ func (s *dropScene) Draw(dst *ebiten.Image) {
 		line := fmt.Sprintf("%s — %s", d.Title, d.Artist)
 		lic := d.License
 		if i == s.selected {
-			vector.DrawFilledRect(dst, 160, float32(y)-6, W-320, demoRowH-8, colPanel, false)
+			vector.FillRect(dst, 160, float32(y)-6, W-320, demoRowH-8, colPanel, false)
 			vector.StrokeRect(dst, 160, float32(y)-6, W-320, demoRowH-8, 1, colAccent, false)
 			drawText(dst, "▶", 180, y, colAccent, 2)
 		}

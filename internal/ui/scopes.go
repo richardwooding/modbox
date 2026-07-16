@@ -32,7 +32,7 @@ func drawScopes(dst *ebiten.Image, p *player.Player, nCh int) {
 		x := 8 + float32(col)*boxW
 		y := float32(scopesY) + float32(row)*boxH
 
-		vector.DrawFilledRect(dst, x+2, y+2, boxW-4, boxH-4, colPanel, false)
+		vector.FillRect(dst, x+2, y+2, boxW-4, boxH-4, colPanel, false)
 		vector.StrokeRect(dst, x+2, y+2, boxW-4, boxH-4, 1, colPanelEdge, false)
 		drawText(dst, fmt.Sprintf("%d", ch+1), float64(x)+6, float64(y)+4, colDimmer, 1)
 

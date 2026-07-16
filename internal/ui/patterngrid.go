@@ -16,7 +16,7 @@ const (
 // drawPatternGrid renders the scrolling pattern view with the current row
 // centered on an accent bar and other rows dimmed by distance.
 func drawPatternGrid(dst *ebiten.Image, info player.SongInfo, snap player.Snapshot) {
-	vector.DrawFilledRect(dst, 0, gridY, W, gridH, colPanel, false)
+	vector.FillRect(dst, 0, gridY, W, gridH, colPanel, false)
 	vector.StrokeRect(dst, 0.5, gridY+0.5, W-1, gridH-1, 1, colPanelEdge, false)
 
 	if snap.Order >= len(info.Orders) {
@@ -33,7 +33,7 @@ func drawPatternGrid(dst *ebiten.Image, info player.SongInfo, snap player.Snapsh
 	visible := gridH / rowH / 2 // rows above and below center
 
 	// Highlight bar for the current row.
-	vector.DrawFilledRect(dst, 0, float32(centerY)-2, W, rowH+2, colAccentDim, false)
+	vector.FillRect(dst, 0, float32(centerY)-2, W, rowH+2, colAccentDim, false)
 
 	for off := -visible; off <= visible; off++ {
 		r := snap.Row + off

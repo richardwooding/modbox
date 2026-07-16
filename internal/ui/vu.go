@@ -52,18 +52,18 @@ func (v *vuMeters) Draw(dst *ebiten.Image) {
 	for i, lvl := range v.levels {
 		x := 8 + float32(i)*barW
 		w := barW - 6
-		vector.DrawFilledRect(dst, x, vuY, w, vuH, colPanel, false)
+		vector.FillRect(dst, x, vuY, w, vuH, colPanel, false)
 
 		h := lvl * vuH
 		clr := colGreen
 		if lvl > 0.85 {
 			clr = colAmber
 		}
-		vector.DrawFilledRect(dst, x, vuY+vuH-h, w, h, clr, false)
+		vector.FillRect(dst, x, vuY+vuH-h, w, h, clr, false)
 
 		ph := v.peaks[i] * vuH
 		if ph > 1 {
-			vector.DrawFilledRect(dst, x, vuY+vuH-ph-1, w, 2, colAmber, false)
+			vector.FillRect(dst, x, vuY+vuH-ph-1, w, 2, colAmber, false)
 		}
 	}
 }

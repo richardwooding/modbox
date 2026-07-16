@@ -94,7 +94,7 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 	info := s.p.Info
 
 	// Header
-	vector.DrawFilledRect(dst, 0, 0, W, headerH, colPanel, false)
+	vector.FillRect(dst, 0, 0, W, headerH, colPanel, false)
 	vector.StrokeLine(dst, 0, headerH, W, headerH, 1, colPanelEdge, false)
 	name := info.Name
 	if name == "" {
@@ -145,7 +145,7 @@ func drawOrderStrip(dst *ebiten.Image, info player.SongInfo, cur int) {
 	for i, pat := range info.Orders {
 		cell := fmt.Sprintf("%02d", pat)
 		if i == cur {
-			vector.DrawFilledRect(dst, float32(x)-3, float32(y)-3, float32(textWidth(cell, 1))+6, 18, colAccentDim, false)
+			vector.FillRect(dst, float32(x)-3, float32(y)-3, float32(textWidth(cell, 1))+6, 18, colAccentDim, false)
 			drawText(dst, cell, x, y, colText, 1)
 		} else {
 			drawText(dst, cell, x, y, colDim, 1)
