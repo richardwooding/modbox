@@ -138,6 +138,9 @@ func TestRenderProducesPCMAndState(t *testing.T) {
 	if len(snap.ChannelVU) != 4 {
 		t.Errorf("ChannelVU has %d channels, want 4", len(snap.ChannelVU))
 	}
+	if snap.RowFrac < 0 || snap.RowFrac > 1 {
+		t.Errorf("RowFrac = %f, want within [0,1]", snap.RowFrac)
+	}
 
 	// Channels 0, 2, and 3 carry notes; each of their scopes must show
 	// energy, and silent channel 1 must stay flat — this is what catches

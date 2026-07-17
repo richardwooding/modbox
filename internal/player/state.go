@@ -18,6 +18,7 @@ type Snapshot struct {
 	Order     int
 	Row       int
 	Tick      int
+	RowFrac   float64 // progress through the current row, 0..1 — smooth scroll
 	BPM       int
 	Speed     int
 	ChannelVU []float32

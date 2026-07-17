@@ -36,6 +36,7 @@ type playerScene struct {
 	spec     *spectrum
 	specBuf  []float32
 	master   []float32
+	instr    *instrPanel // nil when the module has no usable names
 
 	frame        int64 // Update counter, for double-tap detection
 	lastTapCh    int
@@ -63,9 +64,22 @@ func newPlayerScene(g *Game, p *player.Player) (*playerScene, error) {
 		master:    make([]float32, fftSize),
 		lastTapCh: -1,
 	}
+	if ip := newInstrPanel(); ip.wanted(p.Info) {
+		s.instr = ip
+	}
 	s.layoutTransport()
 	return s, nil
 }
+
+// gridWidth leaves room for the instrument panel when there is one.
+func (s *playerScene) gridWidth() int {
+	if s.instr != nil {
+		return W - instrPanelW
+	}
+	return W
+}
+
+const instrPanelW = 240
 
 // layoutTransport places the tap targets right-to-left in the header.
 func (s *playerScene) layoutTransport() {
@@ -216,7 +230,11 @@ func (s *playerScene) Update(g *Game) error {
 		}
 	}
 
-	s.vu.Update(s.p.Snapshot().ChannelVU)
+	snap := s.p.Snapshot()
+	s.vu.Update(snap.ChannelVU)
+	if s.instr != nil {
+		s.instr.Update(s.p.Info, snap, s.frame)
+	}
 	return nil
 }
 
@@ -352,8 +370,11 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 	// Order strip
 	drawOrderStrip(dst, info, snap.Order)
 
-	// Pattern grid
-	drawPatternGrid(dst, info, snap)
+	// Pattern grid + instrument panel
+	drawPatternGrid(dst, info, snap, s.gridWidth())
+	if s.instr != nil {
+		s.instr.Draw(dst, info, s.frame, s.gridWidth(), instrPanelW)
+	}
 
 	// Scopes
 	drawScopes(dst, s.p, info.NumChannels, playerScopeArea())

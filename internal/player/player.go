@@ -25,6 +25,8 @@ import (
 	"github.com/gotracker/playback/player/render"
 	"github.com/gotracker/playback/player/sampler"
 	"github.com/gotracker/playback/song"
+
+	"github.com/richardwooding/modbox/internal/modnames"
 )
 
 const (
@@ -45,6 +47,7 @@ type SongInfo struct {
 	InitialSpeed int
 	Orders       []int              // order position -> pattern index
 	PatternText  map[int][][]string // pattern index -> rows -> per-channel cells
+	Instruments  []string           // instrument/sample names read from the file bytes
 }
 
 // orderSeeker is the richer surface the concrete machine implements beyond
@@ -148,6 +151,7 @@ func buildInfo(sd song.Data, raw []byte) SongInfo {
 		InitialSpeed: sd.GetInitialTempo(),
 		PatternText:  map[int][][]string{},
 	}
+	info.Instruments = modnames.Names(raw)
 	orders := sd.GetOrderList()
 	info.NumOrders = len(orders)
 	for _, pat := range orders {
@@ -350,12 +354,35 @@ func (p *Player) Snapshot() Snapshot {
 	if speed == 0 {
 		speed = p.Info.InitialSpeed
 	}
+	if speed == 0 {
+		speed = 6
+	}
+
+	// Sub-row progress for smooth scrolling: how far through the current
+	// tick the playhead is, folded into ticks-per-row.
+	rowFrac := 0.0
+	if ev.bpm > 0 {
+		samplesPerTick := 2.5 * SampleRate / float64(ev.bpm)
+		tickFrac := float64(playhead-ev.startSample) / samplesPerTick
+		if tickFrac < 0 {
+			tickFrac = 0
+		}
+		if tickFrac > 1 {
+			tickFrac = 1
+		}
+		rowFrac = (float64(ev.tick) + tickFrac) / float64(speed)
+		if rowFrac > 1 {
+			rowFrac = 1
+		}
+	}
+
 	return Snapshot{
 		Playing:   !p.paused.Load() && !p.finished.Load(),
 		Finished:  p.finished.Load(),
 		Order:     ev.order,
 		Row:       ev.row,
 		Tick:      ev.tick,
+		RowFrac:   rowFrac,
 		BPM:       ev.bpm,
 		Speed:     speed,
 		ChannelVU: ev.vu,
