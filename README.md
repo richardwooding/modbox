@@ -24,15 +24,23 @@ Drag any module file onto the page, or start with a bundled demo song.
 
 ## Controls
 
-| Key       | Action                    |
-| --------- | ------------------------- |
-| `space`   | pause / resume            |
-| `←` / `→` | seek one order back/ahead |
-| `+` / `-` | volume                    |
-| `esc`     | back to the song picker   |
-| `d`       | debug overlay             |
+| Key       | Action                              |
+| --------- | ----------------------------------- |
+| `space`   | pause / resume                      |
+| `←` / `→` | seek one order back/ahead           |
+| `+` / `-` | volume                              |
+| `1`–`0`   | mute channel 1–10                   |
+| `l`       | loop the song                       |
+| `f`       | fullscreen demo mode (spectrum)     |
+| `esc`     | back to the song picker             |
+| `d`       | debug overlay                       |
 
-Deep-link a demo with `?demo=0`, `?demo=1`, …
+Tap a channel's oscilloscope to mute it, double-tap to solo. When a demo
+song ends with looping off, the next demo plays (jukebox mode). Everything
+is also reachable by touch via the transport bar.
+
+Deep-link a demo with `?demo=0`, `?demo=1`, … — add `&fx=1` to land straight
+in the demo-mode visualizer.
 
 ## Development
 

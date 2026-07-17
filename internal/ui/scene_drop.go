@@ -25,12 +25,16 @@ func newDropScene() *dropScene { return &dropScene{} }
 func (s *dropScene) Update(g *Game) error {
 	demos := modules.Demos()
 
-	// ?demo=N deep-links straight into a bundled song.
+	// ?demo=N deep-links straight into a bundled song; &fx=1 adds the
+	// spectacle view.
 	if !s.autoTried {
 		s.autoTried = true
 		if n := autostartDemo(); n >= 0 && n < len(demos) {
 			s.selected = n
-			s.load(g, demos[n].Data, demos[n].Title)
+			s.loadDemo(g, n)
+			if ps, ok := g.scene.(*playerScene); ok && autostartFX() {
+				ps.demoMode = true
+			}
 			return nil
 		}
 	}
@@ -43,7 +47,7 @@ func (s *dropScene) Update(g *Game) error {
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		if len(demos) > 0 {
-			s.load(g, demos[s.selected].Data, demos[s.selected].Title)
+			s.loadDemo(g, s.selected)
 		}
 	}
 	// Taps (mouse or touch): demo rows select on first tap, play on second;
@@ -57,7 +61,7 @@ func (s *dropScene) Update(g *Game) error {
 				y := demoListY + i*demoRowH
 				if pt.Y >= y && pt.Y < y+demoRowH && pt.X >= 160 && pt.X < W-160 {
 					if s.selected == i {
-						s.load(g, demos[i].Data, demos[i].Title)
+						s.loadDemo(g, i)
 					}
 					s.selected = i
 				}
@@ -94,6 +98,16 @@ func (s *dropScene) load(g *Game, data []byte, name string) {
 		return
 	}
 	g.scene = ps
+}
+
+// loadDemo starts bundled demo i and remembers the index so the jukebox can
+// advance to the next demo when the song ends.
+func (s *dropScene) loadDemo(g *Game, i int) {
+	demos := modules.Demos()
+	s.load(g, demos[i].Data, demos[i].Title)
+	if ps, ok := g.scene.(*playerScene); ok {
+		ps.demoIdx = i
+	}
 }
 
 // firstFile reads the first regular file from a dropped fs.FS.

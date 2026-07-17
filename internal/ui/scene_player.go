@@ -2,12 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/richardwooding/modbox/internal/modules"
 	"github.com/richardwooding/modbox/internal/player"
 )
 
@@ -29,8 +31,18 @@ type playerScene struct {
 	vu    *vuMeters
 	debug bool
 
+	demoIdx  int // bundled-demo index this song came from; -1 for user files
+	demoMode bool
+	spec     *spectrum
+	specBuf  []float32
+	master   []float32
+
+	frame        int64 // Update counter, for double-tap detection
+	lastTapCh    int
+	lastTapFrame int64
+
 	// transport bar (top-right of the header); btnLoad is wasm-only
-	btnLoad, btnPrev, btnPlay, btnNext, btnVolDn, btnVolUp button
+	btnLoad, btnPrev, btnPlay, btnNext, btnVolDn, btnVolUp, btnLoop, btnFull button
 }
 
 func newPlayerScene(g *Game, p *player.Player) (*playerScene, error) {
@@ -41,7 +53,16 @@ func newPlayerScene(g *Game, p *player.Player) (*playerScene, error) {
 	ap.SetBufferSize(100 * time.Millisecond)
 	p.Start()
 	ap.Play()
-	s := &playerScene{p: p, audio: ap, vu: newVUMeters(p.Info.NumChannels)}
+	s := &playerScene{
+		p:         p,
+		audio:     ap,
+		vu:        newVUMeters(p.Info.NumChannels),
+		demoIdx:   -1,
+		spec:      newSpectrum(),
+		specBuf:   make([]float32, fftSize),
+		master:    make([]float32, fftSize),
+		lastTapCh: -1,
+	}
 	s.layoutTransport()
 	return s, nil
 }
@@ -55,6 +76,8 @@ func (s *playerScene) layoutTransport() {
 		x -= bw + gap
 	}
 	// Labels stick to glyphs the 6x13 bitmap font actually has.
+	place(&s.btnFull, "full")
+	place(&s.btnLoop, "loop")
 	place(&s.btnVolUp, "+")
 	place(&s.btnVolDn, "-")
 	place(&s.btnNext, ">>")
@@ -63,6 +86,16 @@ func (s *playerScene) layoutTransport() {
 	if canPickFiles() {
 		place(&s.btnLoad, "load")
 	}
+}
+
+// playerScopeArea is the scope band in the normal layout.
+func playerScopeArea() rectF { return rectF{x: 8, y: scopesY, w: W - 16, h: scopesH} }
+
+// setDemoMode toggles the fullscreen spectacle view. The trigger is always a
+// user gesture (keypress or tap), which browsers require for fullscreen.
+func (s *playerScene) setDemoMode(on bool) {
+	s.demoMode = on
+	ebiten.SetFullscreen(on)
 }
 
 // togglePlayback pauses/resumes both the renderer and the audio device.
@@ -76,6 +109,23 @@ func (s *playerScene) togglePlayback() {
 }
 
 func (s *playerScene) Update(g *Game) error {
+	s.frame++
+
+	// Demo mode: pure spectacle — any tap, F, or Esc returns to the player.
+	if s.demoMode {
+		if inpututil.IsKeyJustPressed(ebiten.KeyEscape) ||
+			inpututil.IsKeyJustPressed(ebiten.KeyF) ||
+			len(justTaps()) > 0 {
+			s.setDemoMode(false)
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+			s.togglePlayback()
+		}
+		s.updateSpectrum()
+		s.jukebox(g)
+		return nil
+	}
+
 	switch {
 	case inpututil.IsKeyJustPressed(ebiten.KeySpace):
 		s.togglePlayback()
@@ -87,12 +137,29 @@ func (s *playerScene) Update(g *Game) error {
 		s.p.SetGain(s.p.Gain() + 0.1)
 	case inpututil.IsKeyJustPressed(ebiten.KeyMinus), inpututil.IsKeyJustPressed(ebiten.KeyKPSubtract):
 		s.p.SetGain(s.p.Gain() - 0.1)
+	case inpututil.IsKeyJustPressed(ebiten.KeyL):
+		s.p.SetLoop(!s.p.Loop())
+	case inpututil.IsKeyJustPressed(ebiten.KeyF):
+		s.setDemoMode(true)
 	case inpututil.IsKeyJustPressed(ebiten.KeyD):
 		s.debug = !s.debug
 	case inpututil.IsKeyJustPressed(ebiten.KeyEscape):
 		s.close()
 		g.scene = newDropScene()
 		return nil
+	}
+
+	// Digit keys 1-9 toggle channel mutes, 0 is channel 10.
+	if s.p.CanMute() {
+		for i, k := range []ebiten.Key{
+			ebiten.KeyDigit1, ebiten.KeyDigit2, ebiten.KeyDigit3, ebiten.KeyDigit4,
+			ebiten.KeyDigit5, ebiten.KeyDigit6, ebiten.KeyDigit7, ebiten.KeyDigit8,
+			ebiten.KeyDigit9, ebiten.KeyDigit0,
+		} {
+			if inpututil.IsKeyJustPressed(k) {
+				s.p.ToggleMute(i)
+			}
+		}
 	}
 
 	// Transport bar taps (mouse or touch).
@@ -110,6 +177,12 @@ func (s *playerScene) Update(g *Game) error {
 			s.p.SetGain(s.p.Gain() - 0.1)
 		case s.btnVolUp.hit(taps):
 			s.p.SetGain(s.p.Gain() + 0.1)
+		case s.btnLoop.hit(taps):
+			s.p.SetLoop(!s.p.Loop())
+		case s.btnFull.hit(taps):
+			s.setDemoMode(true)
+		case s.scopeTap(taps):
+			// handled: mute (single tap) or solo (double tap)
 		default:
 			// A tap on the pattern grid is a big, phone-friendly
 			// play/pause target.
@@ -121,6 +194,8 @@ func (s *playerScene) Update(g *Game) error {
 			}
 		}
 	}
+
+	s.jukebox(g)
 
 	// A new file (dropped, or picked via the browse dialog) replaces the
 	// current player.
@@ -145,12 +220,81 @@ func (s *playerScene) Update(g *Game) error {
 	return nil
 }
 
+// scopeTap mutes a channel whose scope box was tapped; a double tap (within
+// ~20 frames on the same box) solos it instead. Reports whether a tap landed.
+func (s *playerScene) scopeTap(taps []image.Point) bool {
+	if !s.p.CanMute() {
+		return false
+	}
+	boxes := scopeBoxes(s.p.Info.NumChannels, playerScopeArea())
+	for _, pt := range taps {
+		for ch, box := range boxes {
+			if !box.contains(pt) {
+				continue
+			}
+			if ch == s.lastTapCh && s.frame-s.lastTapFrame <= 20 {
+				s.p.Solo(ch)
+			} else {
+				s.p.ToggleMute(ch)
+			}
+			s.lastTapCh, s.lastTapFrame = ch, s.frame
+			return true
+		}
+	}
+	return false
+}
+
+// jukebox auto-advances to the next bundled demo when a demo song finishes
+// with looping off.
+func (s *playerScene) jukebox(g *Game) {
+	if s.demoIdx < 0 || s.p.Loop() || !s.p.Snapshot().Finished {
+		return
+	}
+	demos := modules.Demos()
+	if len(demos) == 0 {
+		return
+	}
+	next := (s.demoIdx + 1) % len(demos)
+	np, err := player.Load(demos[next].Data)
+	if err != nil {
+		return
+	}
+	ns, err := newPlayerScene(g, np)
+	if err != nil {
+		np.Close()
+		return
+	}
+	ns.demoIdx = next
+	ns.demoMode = s.demoMode // stay in the spectacle if we were there
+	s.close()
+	g.scene = ns
+}
+
+// updateSpectrum folds all channel taps into a master window and feeds the
+// analyzer.
+func (s *playerScene) updateSpectrum() {
+	for i := range s.master {
+		s.master[i] = 0
+	}
+	for ch := range s.p.Info.NumChannels {
+		s.p.Scope(ch, s.specBuf)
+		for i, v := range s.specBuf {
+			s.master[i] += v
+		}
+	}
+	s.spec.Update(s.master)
+}
+
 func (s *playerScene) close() {
 	_ = s.audio.Close()
 	s.p.Close()
 }
 
 func (s *playerScene) Draw(dst *ebiten.Image) {
+	if s.demoMode {
+		s.drawDemoMode(dst)
+		return
+	}
 	snap := s.p.Snapshot()
 	info := s.p.Info
 
@@ -175,6 +319,9 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 
 	stats := fmt.Sprintf("ORD %02d/%02d  ROW %02d  BPM %3d  SPD %d  VOL %.0f%%",
 		snap.Order, info.NumOrders, snap.Row, snap.BPM, snap.Speed, s.p.Gain()*100)
+	if s.p.Loop() {
+		stats += "  LOOP"
+	}
 	drawText(dst, stats, 16, 38, colDim, 1)
 	state := "▶ PLAYING"
 	stateCol := colGreen
@@ -199,6 +346,8 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 	s.btnNext.draw(dst, false)
 	s.btnVolDn.draw(dst, false)
 	s.btnVolUp.draw(dst, false)
+	s.btnLoop.draw(dst, s.p.Loop())
+	s.btnFull.draw(dst, false)
 
 	// Order strip
 	drawOrderStrip(dst, info, snap.Order)
@@ -207,7 +356,7 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 	drawPatternGrid(dst, info, snap)
 
 	// Scopes
-	drawScopes(dst, s.p, info.NumChannels)
+	drawScopes(dst, s.p, info.NumChannels, playerScopeArea())
 
 	// VU
 	s.vu.Draw(dst)
@@ -218,9 +367,45 @@ func (s *playerScene) Draw(dst *ebiten.Image) {
 			snap.Underruns, snap.Buffered, snap.Playhead, s.p.LatencyOffset)
 		drawText(dst, dbg, 16, H-18, colAmber, 1)
 	} else {
-		help := "space pause · ←/→ seek order · +/- volume · esc back · d debug"
+		help := "space pause · ←/→ seek · tap scope mute, 2x solo · l loop · f fullscreen · esc back"
 		drawText(dst, help, (W-textWidth(help, 1))/2, H-18, colDimmer, 1)
 	}
+}
+
+// drawDemoMode is the fullscreen spectacle: giant scopes over a spectrum
+// analyzer, chrome hidden.
+func (s *playerScene) drawDemoMode(dst *ebiten.Image) {
+	info := s.p.Info
+
+	name := info.Name
+	if name == "" {
+		name = "(untitled)"
+	}
+	drawText(dst, name, (W-textWidth(name, 3))/2, 18, colAccent, 3)
+
+	const specH = 150
+	scopeArea := rectF{x: 8, y: 70, w: W - 16, h: H - 70 - specH - 40}
+	drawScopes(dst, s.p, info.NumChannels, scopeArea)
+
+	// Spectrum bars across the bottom.
+	barsY := float32(H - specH - 24)
+	barW := float32(W-16) / spectrumBars
+	for b, v := range s.spec.bars {
+		h := v * specH
+		x := 8 + float32(b)*barW
+		vector.FillRect(dst, x+1, barsY+specH-h, barW-2, h, colAccent, false)
+		vector.FillRect(dst, x+1, barsY+specH-h, barW-2, min32(h, 3), colText, false)
+	}
+
+	hint := "tap / esc to exit"
+	drawText(dst, hint, (W-textWidth(hint, 1))/2, H-16, colDimmer, 1)
+}
+
+func min32(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func drawOrderStrip(dst *ebiten.Image, info player.SongInfo, cur int) {

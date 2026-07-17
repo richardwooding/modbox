@@ -21,3 +21,10 @@ func autostartDemo() int {
 	}
 	return -1
 }
+
+// autostartFX reads ?fx=1 — deep-link straight into the spectacle view
+// (fullscreen itself still waits for a gesture; browsers require one).
+func autostartFX() bool {
+	search := js.Global().Get("location").Get("search").String()
+	return strings.Contains(search, "fx=1")
+}

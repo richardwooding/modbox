@@ -56,10 +56,19 @@ type orderSeeker interface {
 type Player struct {
 	Info SongInfo
 
+	raw   []byte // original module bytes; loop mode rebuilds the machine from them
 	mach  machine.MachineTicker
 	out   *sampler.Sampler
 	mixer mixing.Mixer
 	seek  orderSeeker // nil when unsupported
+	loop  atomic.Bool
+
+	// muteMask silences channels at the premix stage (bit ch = muted).
+	// The library's SetChannelMute stores but never applies the flag in
+	// v1.5.0, so modbox mutes by zeroing the channel's premix volume in
+	// onGenerate — atomically readable there, since the render mutex is
+	// already held around Render.
+	muteMask atomic.Int64
 
 	ring   *pcmRing
 	taps   []*scopeTap
@@ -81,8 +90,8 @@ type Player struct {
 	LatencyOffset int64
 }
 
-// Load parses a module (MOD/S3M/XM/IT — auto-detected) and prepares a Player.
-func Load(data []byte) (*Player, error) {
+// newMachine builds a fresh playback machine from module bytes.
+func newMachine(data []byte) (machine.MachineTicker, song.Data, error) {
 	features := []feature.Feature{
 		feature.UseNativeSampleFormat(true),
 		feature.IgnoreUnknownEffect{Enabled: true},
@@ -90,18 +99,28 @@ func Load(data []byte) (*Player, error) {
 	}
 	songData, songFormat, err := format.LoadFromReader("", bytes.NewReader(data), features...)
 	if err != nil {
-		return nil, fmt.Errorf("not a playable module: %w", err)
+		return nil, nil, fmt.Errorf("not a playable module: %w", err)
 	}
 	var us settings.UserSettings
 	if err := songFormat.ConvertFeaturesToSettings(&us, features); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mach, err := machine.NewMachine(songData, us)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mach, songData, nil
+}
+
+// Load parses a module (MOD/S3M/XM/IT — auto-detected) and prepares a Player.
+func Load(data []byte) (*Player, error) {
+	mach, songData, err := newMachine(data)
 	if err != nil {
 		return nil, err
 	}
 
 	p := &Player{
+		raw:           data,
 		mach:          mach,
 		mixer:         mixing.Mixer{Channels: Channels},
 		ring:          newPCMRing(ringCapacity),
@@ -186,10 +205,10 @@ func sniffFormat(b []byte) string {
 
 // Start launches the render goroutine.
 func (p *Player) Start() {
-	go p.loop()
+	go p.renderLoop()
 }
 
-func (p *Player) loop() {
+func (p *Player) renderLoop() {
 	defer p.ring.Close()
 	for {
 		select {
@@ -212,14 +231,31 @@ func (p *Player) loop() {
 		}
 		p.mu.Unlock()
 		if err != nil {
-			if !errors.Is(err, song.ErrStopSong) {
-				// Render errors on hostile files end playback gracefully.
-				_ = err
+			// Loop mode restarts cleanly on natural song end: rebuild the
+			// machine from the original bytes and keep rendering into the
+			// same ring — the sample timeline just continues.
+			if errors.Is(err, song.ErrStopSong) && p.loop.Load() && p.restart() {
+				continue
 			}
 			p.finished.Store(true)
 			return
 		}
 	}
+}
+
+// restart replaces the machine with a fresh one at the top of the song.
+// Mutes live in muteMask and apply at the premix stage, so they carry over
+// untouched. Reports success.
+func (p *Player) restart() bool {
+	mach, _, err := newMachine(p.raw)
+	if err != nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mach = mach
+	p.seek, _ = mach.(orderSeeker)
+	return true
 }
 
 // onGenerate runs synchronously inside Render for every tick (~20ms of audio).
@@ -234,10 +270,16 @@ func (p *Player) onGenerate(premix *output.PremixData) {
 	// premix.Data[0] holds one mixing.Data per voice — actual channels first
 	// (in channel order, silent ones zero-filled), then IT past-note virtual
 	// voices; further premix.Data entries are hardware synths (OPL2).
+	// Muted channels get their premix volume zeroed here, which silences
+	// them in the mixdown, the taps, and the VU all at once.
+	mask := p.muteMask.Load()
 	ev.vu = make([]float32, p.Info.NumChannels)
 	if len(premix.Data) > 0 {
 		voices := premix.Data[0]
 		for ch := 0; ch < p.Info.NumChannels && ch < len(voices); ch++ {
+			if ch < 64 && mask&(1<<ch) != 0 {
+				voices[ch].Volume = 0
+			}
 			mono := foldData(voices[ch], premix.SamplesLen)
 			p.taps[ch].Write(mono)
 			ev.vu[ch] = peak(mono)
@@ -372,6 +414,50 @@ func (p *Player) SeekOrder(delta int) {
 		t.Reset(rendered)
 	}
 }
+
+// CanMute reports whether per-channel muting is available (premix-level, so
+// it works for the first 64 channels of any format).
+func (p *Player) CanMute() bool { return p.Info.NumChannels > 0 }
+
+// IsMuted reports channel ch's mute state.
+func (p *Player) IsMuted(ch int) bool {
+	return ch >= 0 && ch < 64 && p.muteMask.Load()&(1<<ch) != 0
+}
+
+// ToggleMute flips one channel's mute state.
+func (p *Player) ToggleMute(ch int) {
+	if ch < 0 || ch >= min(p.Info.NumChannels, 64) {
+		return
+	}
+	for {
+		old := p.muteMask.Load()
+		if p.muteMask.CompareAndSwap(old, old^(1<<ch)) {
+			return
+		}
+	}
+}
+
+// Solo mutes every channel except ch; if ch is already the only audible
+// channel, it unmutes everything instead.
+func (p *Player) Solo(ch int) {
+	n := min(p.Info.NumChannels, 64)
+	if ch < 0 || ch >= n {
+		return
+	}
+	all := int64(1)<<n - 1
+	soloMask := all &^ (1 << ch)
+	if p.muteMask.Load() == soloMask {
+		p.muteMask.Store(0)
+		return
+	}
+	p.muteMask.Store(soloMask)
+}
+
+// Loop reports whether the song restarts on end.
+func (p *Player) Loop() bool { return p.loop.Load() }
+
+// SetLoop enables or disables restart-on-end.
+func (p *Player) SetLoop(v bool) { p.loop.Store(v) }
 
 // Gain returns the user volume (1.0 = unity).
 func (p *Player) Gain() float64 { return float64(p.gain.Load()) / 1000 }
