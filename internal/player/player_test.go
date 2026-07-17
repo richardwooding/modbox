@@ -38,11 +38,19 @@ func tinyMOD() []byte {
 
 	// pattern 0: 64 rows x 4 channels x 4 bytes
 	pattern := make([]byte, 64*4*4)
-	// row 0, channel 0: sample 1, period 428 (C-2), no effect
-	pattern[0] = 0x01 // sample hi nibble (0) | period hi (0x1)
-	pattern[1] = 0xAC // period lo (428 = 0x1AC)
-	pattern[2] = 0x10 // sample lo nibble (1) << 4 | effect 0
-	pattern[3] = 0x00
+	// cell writes sample 1, period 428 (C-2), no effect
+	cell := func(row, ch int) {
+		off := (row*4 + ch) * 4
+		pattern[off] = 0x01   // sample hi nibble (0) | period hi (0x1)
+		pattern[off+1] = 0xAC // period lo (428 = 0x1AC)
+		pattern[off+2] = 0x10 // sample lo nibble (1) << 4 | effect 0
+	}
+	// Notes on three different channels so per-channel visualization
+	// attribution is actually exercised (channel 0 only would mask a bug
+	// where every voice lands on the first channel).
+	cell(0, 0)
+	cell(0, 2)
+	cell(4, 3)
 	buf = append(buf, pattern...)
 
 	// sample data: 64-byte square wave
@@ -99,7 +107,7 @@ func TestRenderProducesPCMAndState(t *testing.T) {
 	buf := make([]byte, 4096)
 	nonZero := false
 	deadline := time.Now().Add(10 * time.Second)
-	for p.Snapshot().Playhead < SampleRate/2 {
+	for p.Snapshot().Playhead < SampleRate { // 1s: past the row-4 note on channel 3
 		n, err := p.Stream().Read(buf)
 		for _, b := range buf[:n] {
 			if b != 0 {
@@ -131,18 +139,28 @@ func TestRenderProducesPCMAndState(t *testing.T) {
 		t.Errorf("ChannelVU has %d channels, want 4", len(snap.ChannelVU))
 	}
 
-	// The scope for channel 0 should show signal once audio has played.
-	scope := make([]float32, 256)
-	p.Scope(0, scope)
-	var energy float32
-	for _, s := range scope {
-		if s < 0 {
-			s = -s
+	// Channels 0, 2, and 3 carry notes; each of their scopes must show
+	// energy, and silent channel 1 must stay flat — this is what catches
+	// misattributing all voices to the first channel.
+	scope := make([]float32, 4096)
+	energyOf := func(ch int) float32 {
+		p.Scope(ch, scope)
+		var e float32
+		for _, s := range scope {
+			if s < 0 {
+				s = -s
+			}
+			e += s
 		}
-		energy += s
+		return e
 	}
-	if energy == 0 {
-		t.Error("channel 0 scope is flat; expected square-wave energy")
+	for _, ch := range []int{0, 2, 3} {
+		if energyOf(ch) == 0 {
+			t.Errorf("channel %d scope is flat; expected square-wave energy", ch)
+		}
+	}
+	if e := energyOf(1); e != 0 {
+		t.Errorf("channel 1 scope has energy %f; expected silence", e)
 	}
 }
 

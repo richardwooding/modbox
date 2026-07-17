@@ -231,11 +231,17 @@ func (p *Player) onGenerate(premix *output.PremixData) {
 		ev.order, ev.row, ev.tick = rr.Order, rr.Row, rr.Tick
 		p.curOrder.Store(int64(rr.Order))
 	}
+	// premix.Data[0] holds one mixing.Data per voice — actual channels first
+	// (in channel order, silent ones zero-filled), then IT past-note virtual
+	// voices; further premix.Data entries are hardware synths (OPL2).
 	ev.vu = make([]float32, p.Info.NumChannels)
-	for ch := 0; ch < p.Info.NumChannels && ch < len(premix.Data); ch++ {
-		mono := foldChannel(premix.Data[ch], premix.SamplesLen)
-		p.taps[ch].Write(mono)
-		ev.vu[ch] = peak(mono)
+	if len(premix.Data) > 0 {
+		voices := premix.Data[0]
+		for ch := 0; ch < p.Info.NumChannels && ch < len(voices); ch++ {
+			mono := foldData(voices[ch], premix.SamplesLen)
+			p.taps[ch].Write(mono)
+			ev.vu[ch] = peak(mono)
+		}
 	}
 	p.states.Push(ev)
 
@@ -253,25 +259,23 @@ func deriveBPM(samplesLen int) int {
 	return int(2.5*SampleRate/float64(samplesLen) + 0.5)
 }
 
-// foldChannel flattens one channel's tick data to mono float32 amplitude.
-func foldChannel(cd mixing.ChannelData, samplesLen int) []float32 {
+// foldData flattens one voice's tick chunk to mono float32 amplitude,
+// honoring the chunk's start offset within the tick.
+func foldData(d mixing.Data, samplesLen int) []float32 {
 	mono := make([]float32, samplesLen)
-	pos := 0
-	for _, d := range cd {
-		vol := float32(d.Volume)
-		for _, m := range d.Data {
-			if pos >= samplesLen {
-				break
-			}
-			var sum float32
-			n := min(m.Channels, len(m.StaticMatrix))
-			for c := range n {
-				sum += float32(m.StaticMatrix[c])
-			}
-			if n > 0 {
-				mono[pos] = sum / float32(n) * vol
-			}
-			pos++
+	vol := float32(d.Volume)
+	for i, m := range d.Data {
+		pos := d.Pos + i
+		if pos < 0 || pos >= samplesLen {
+			continue
+		}
+		var sum float32
+		n := min(m.Channels, len(m.StaticMatrix))
+		for c := range n {
+			sum += float32(m.StaticMatrix[c])
+		}
+		if n > 0 {
+			mono[pos] = sum / float32(n) * vol
 		}
 	}
 	return mono
