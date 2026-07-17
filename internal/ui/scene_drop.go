@@ -46,27 +46,39 @@ func (s *dropScene) Update(g *Game) error {
 			s.load(g, demos[s.selected].Data, demos[s.selected].Title)
 		}
 	}
-	// Click on a demo row selects/starts it.
-	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-		_, my := ebiten.CursorPosition()
-		for i := range demos {
-			y := demoListY + i*demoRowH
-			if my >= y && my < y+demoRowH {
-				if s.selected == i {
-					s.load(g, demos[i].Data, demos[i].Title)
+	// Taps (mouse or touch): demo rows select on first tap, play on second;
+	// the browse button opens the file dialog.
+	if taps := justTaps(); len(taps) > 0 {
+		if canPickFiles() && s.browseBtn().hit(taps) {
+			openFilePicker()
+		}
+		for _, pt := range taps {
+			for i := range demos {
+				y := demoListY + i*demoRowH
+				if pt.Y >= y && pt.Y < y+demoRowH && pt.X >= 160 && pt.X < W-160 {
+					if s.selected == i {
+						s.load(g, demos[i].Data, demos[i].Title)
+					}
+					s.selected = i
 				}
-				s.selected = i
 			}
 		}
 	}
 
-	// Dropped module file.
-	if files := ebiten.DroppedFiles(); files != nil {
+	// Module file arriving via drag-and-drop or the browse dialog.
+	if data, name, ok := takePickedFile(); ok {
+		s.load(g, data, name)
+	} else if files := ebiten.DroppedFiles(); files != nil {
 		if data, name, ok := firstFile(files); ok {
 			s.load(g, data, name)
 		}
 	}
 	return nil
+}
+
+// browseBtn is the phone-friendly alternative to drag-and-drop.
+func (s *dropScene) browseBtn() button {
+	return button{x: W/2 - 90, y: demoListY + float32(len(modules.Demos()))*demoRowH + 18, w: 180, h: 40, label: "browse files…"}
 }
 
 func (s *dropScene) load(g *Game, data []byte, name string) {
@@ -129,9 +141,13 @@ func (s *dropScene) Draw(dst *ebiten.Image) {
 		drawText(dst, lic, W-180-textWidth(lic, 1), y+6, colDim, 1)
 	}
 
+	if canPickFiles() {
+		s.browseBtn().draw(dst, true)
+	}
+
 	if s.errMsg != "" {
 		drawText(dst, s.errMsg, (W-textWidth(s.errMsg, 1))/2, H-70, colRed, 1)
 	}
-	foot := "enter/click to play · music credits in NOTICE.md"
+	foot := "tap/enter to play · music credits in NOTICE.md"
 	drawText(dst, foot, (W-textWidth(foot, 1))/2, H-36, colDimmer, 1)
 }
