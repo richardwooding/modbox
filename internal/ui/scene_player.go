@@ -125,21 +125,45 @@ func (s *playerScene) togglePlayback() {
 func (s *playerScene) Update(g *Game) error {
 	s.frame++
 
-	// Demo mode: pure spectacle — any tap, F, or Esc returns to the player.
 	if s.demoMode {
-		if inpututil.IsKeyJustPressed(ebiten.KeyEscape) ||
-			inpututil.IsKeyJustPressed(ebiten.KeyF) ||
-			len(justTaps()) > 0 {
-			s.setDemoMode(false)
-		}
-		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-			s.togglePlayback()
-		}
-		s.updateSpectrum()
-		s.jukebox(g)
+		s.updateDemoMode(g)
 		return nil
 	}
+	if s.handleKeys(g) {
+		return nil // left for the song picker
+	}
+	s.handleDigitMutes()
+	s.handleTaps(g)
+	s.jukebox(g)
+	if s.handleIncomingFile(g) {
+		return nil // replaced by a fresh player scene
+	}
 
+	snap := s.p.Snapshot()
+	s.vu.Update(snap.ChannelVU)
+	if s.instr != nil {
+		s.instr.Update(s.p.Info, snap, s.frame)
+	}
+	return nil
+}
+
+// updateDemoMode is the spectacle view: any tap, F, or Esc returns to the
+// player; space still pauses.
+func (s *playerScene) updateDemoMode(g *Game) {
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyF) ||
+		len(justTaps()) > 0 {
+		s.setDemoMode(false)
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		s.togglePlayback()
+	}
+	s.updateSpectrum()
+	s.jukebox(g)
+}
+
+// handleKeys runs the keyboard transport; reports whether the scene exited.
+func (s *playerScene) handleKeys(g *Game) bool {
 	switch {
 	case inpututil.IsKeyJustPressed(ebiten.KeySpace):
 		s.togglePlayback()
@@ -160,82 +184,92 @@ func (s *playerScene) Update(g *Game) error {
 	case inpututil.IsKeyJustPressed(ebiten.KeyEscape):
 		s.close()
 		g.scene = newDropScene()
-		return nil
+		return true
 	}
+	return false
+}
 
-	// Digit keys 1-9 toggle channel mutes, 0 is channel 10.
-	if s.p.CanMute() {
-		for i, k := range []ebiten.Key{
-			ebiten.KeyDigit1, ebiten.KeyDigit2, ebiten.KeyDigit3, ebiten.KeyDigit4,
-			ebiten.KeyDigit5, ebiten.KeyDigit6, ebiten.KeyDigit7, ebiten.KeyDigit8,
-			ebiten.KeyDigit9, ebiten.KeyDigit0,
-		} {
-			if inpututil.IsKeyJustPressed(k) {
-				s.p.ToggleMute(i)
-			}
+// handleDigitMutes maps digit keys 1-9 (and 0 as channel 10) to mutes.
+func (s *playerScene) handleDigitMutes() {
+	if !s.p.CanMute() {
+		return
+	}
+	for i, k := range []ebiten.Key{
+		ebiten.KeyDigit1, ebiten.KeyDigit2, ebiten.KeyDigit3, ebiten.KeyDigit4,
+		ebiten.KeyDigit5, ebiten.KeyDigit6, ebiten.KeyDigit7, ebiten.KeyDigit8,
+		ebiten.KeyDigit9, ebiten.KeyDigit0,
+	} {
+		if inpututil.IsKeyJustPressed(k) {
+			s.p.ToggleMute(i)
 		}
 	}
+}
 
-	// Transport bar taps (mouse or touch).
-	if taps := justTaps(); len(taps) > 0 {
-		switch {
-		case canPickFiles() && s.btnLoad.hit(taps):
-			openFilePicker()
-		case s.btnPrev.hit(taps):
-			s.p.SeekOrder(-1)
-		case s.btnPlay.hit(taps):
-			s.togglePlayback()
-		case s.btnNext.hit(taps):
-			s.p.SeekOrder(1)
-		case s.btnVolDn.hit(taps):
-			s.p.SetGain(s.p.Gain() - 0.1)
-		case s.btnVolUp.hit(taps):
-			s.p.SetGain(s.p.Gain() + 0.1)
-		case s.btnLoop.hit(taps):
-			s.p.SetLoop(!s.p.Loop())
-		case s.btnFull.hit(taps):
-			s.setDemoMode(true)
-		case s.scopeTap(taps):
-			// handled: mute (single tap) or solo (double tap)
-		default:
-			// A tap on the pattern grid is a big, phone-friendly
-			// play/pause target.
-			for _, pt := range taps {
-				if pt.Y >= gridY && pt.Y < gridY+gridH {
-					s.togglePlayback()
-					break
-				}
-			}
+// handleTaps routes transport-bar, scope, and pattern-grid taps.
+func (s *playerScene) handleTaps(g *Game) {
+	taps := justTaps()
+	if len(taps) == 0 {
+		return
+	}
+	switch {
+	case canPickFiles() && s.btnLoad.hit(taps):
+		openFilePicker()
+	case s.btnPrev.hit(taps):
+		s.p.SeekOrder(-1)
+	case s.btnPlay.hit(taps):
+		s.togglePlayback()
+	case s.btnNext.hit(taps):
+		s.p.SeekOrder(1)
+	case s.btnVolDn.hit(taps):
+		s.p.SetGain(s.p.Gain() - 0.1)
+	case s.btnVolUp.hit(taps):
+		s.p.SetGain(s.p.Gain() + 0.1)
+	case s.btnLoop.hit(taps):
+		s.p.SetLoop(!s.p.Loop())
+	case s.btnFull.hit(taps):
+		s.setDemoMode(true)
+	case s.scopeTap(taps):
+		// handled: mute (single tap) or solo (double tap)
+	case s.gridTapped(taps):
+		// a tap on the pattern grid is a big, phone-friendly pause target
+		s.togglePlayback()
+	}
+}
+
+// gridTapped reports whether any tap landed on the pattern grid.
+func (s *playerScene) gridTapped(taps []image.Point) bool {
+	for _, pt := range taps {
+		if pt.Y >= gridY && pt.Y < gridY+gridH {
+			return true
 		}
 	}
+	return false
+}
 
-	s.jukebox(g)
-
-	// A new file (dropped, or picked via the browse dialog) replaces the
-	// current player.
+// handleIncomingFile replaces the player with a dropped or browsed module;
+// reports whether the scene was replaced.
+func (s *playerScene) handleIncomingFile(g *Game) bool {
 	data, _, ok := takePickedFile()
 	if !ok {
 		if files := ebiten.DroppedFiles(); files != nil {
 			data, _, ok = firstFile(files)
 		}
 	}
-	if ok {
-		if np, err := player.Load(data); err == nil {
-			if ns, err := newPlayerScene(g, np); err == nil {
-				s.close()
-				g.scene = ns
-				return nil
-			}
-			np.Close()
-		}
+	if !ok {
+		return false
 	}
-
-	snap := s.p.Snapshot()
-	s.vu.Update(snap.ChannelVU)
-	if s.instr != nil {
-		s.instr.Update(s.p.Info, snap, s.frame)
+	np, err := player.Load(data)
+	if err != nil {
+		return false
 	}
-	return nil
+	ns, err := newPlayerScene(g, np)
+	if err != nil {
+		np.Close()
+		return false
+	}
+	s.close()
+	g.scene = ns
+	return true
 }
 
 // scopeTap mutes a channel whose scope box was tapped; a double tap (within
