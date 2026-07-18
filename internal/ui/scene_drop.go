@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"io/fs"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -24,21 +25,41 @@ func newDropScene() *dropScene { return &dropScene{} }
 
 func (s *dropScene) Update(g *Game) error {
 	demos := modules.Demos()
-
-	// ?demo=N deep-links straight into a bundled song; &fx=1 adds the
-	// spectacle view.
-	if !s.autoTried {
-		s.autoTried = true
-		if n := autostartDemo(); n >= 0 && n < len(demos) {
-			s.selected = n
-			s.loadDemo(g, n)
-			if ps, ok := g.scene.(*playerScene); ok && autostartFX() {
-				ps.demoMode = true
-			}
-			return nil
-		}
+	if s.tryAutostart(g, demos) {
+		return nil
 	}
+	s.handleKeys(g, demos)
+	if g.scene != scene(s) {
+		return nil // a song started; don't keep driving the stale scene
+	}
+	s.handleTaps(g, demos)
+	if g.scene != scene(s) {
+		return nil
+	}
+	s.handleIncomingFile(g)
+	return nil
+}
 
+// tryAutostart honors ?demo=N (and &fx=1) once; reports whether a song started.
+func (s *dropScene) tryAutostart(g *Game, demos []modules.Demo) bool {
+	if s.autoTried {
+		return false
+	}
+	s.autoTried = true
+	n := autostartDemo()
+	if n < 0 || n >= len(demos) {
+		return false
+	}
+	s.selected = n
+	s.loadDemo(g, n)
+	if ps, ok := g.scene.(*playerScene); ok && autostartFX() {
+		ps.demoMode = true
+	}
+	return true
+}
+
+// handleKeys moves the selection and starts on enter/space.
+func (s *dropScene) handleKeys(g *Game, demos []modules.Demo) {
 	if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) && s.selected < len(demos)-1 {
 		s.selected++
 	}
@@ -50,34 +71,57 @@ func (s *dropScene) Update(g *Game) error {
 			s.loadDemo(g, s.selected)
 		}
 	}
-	// Taps (mouse or touch): demo rows select on first tap, play on second;
-	// the browse button opens the file dialog.
-	if taps := justTaps(); len(taps) > 0 {
-		if canPickFiles() && s.browseBtn().hit(taps) {
-			openFilePicker()
-		}
-		for _, pt := range taps {
-			for i := range demos {
-				y := demoListY + i*demoRowH
-				if pt.Y >= y && pt.Y < y+demoRowH && pt.X >= 160 && pt.X < W-160 {
-					if s.selected == i {
-						s.loadDemo(g, i)
-					}
-					s.selected = i
-				}
-			}
-		}
-	}
+}
 
-	// Module file arriving via drag-and-drop or the browse dialog.
+// handleTaps routes touch/click: the browse button opens the file dialog;
+// demo rows select on first tap, play on second.
+func (s *dropScene) handleTaps(g *Game, demos []modules.Demo) {
+	taps := justTaps()
+	if len(taps) == 0 {
+		return
+	}
+	if canPickFiles() && s.browseBtn().hit(taps) {
+		openFilePicker()
+	}
+	for _, pt := range taps {
+		if g.scene != scene(s) {
+			break // a song already started; further taps would leak players
+		}
+		i, ok := demoRowAt(pt, len(demos))
+		if !ok {
+			continue
+		}
+		if s.selected == i {
+			s.loadDemo(g, i)
+		}
+		s.selected = i
+	}
+}
+
+// demoRowAt maps a point to a demo-list row index.
+func demoRowAt(pt image.Point, n int) (int, bool) {
+	if pt.X < 160 || pt.X >= W-160 || pt.Y < demoListY {
+		return 0, false
+	}
+	i := (pt.Y - demoListY) / demoRowH
+	if i >= n {
+		return 0, false
+	}
+	return i, true
+}
+
+// handleIncomingFile loads a module arriving via drag-and-drop or the
+// browse dialog.
+func (s *dropScene) handleIncomingFile(g *Game) {
 	if data, name, ok := takePickedFile(); ok {
 		s.load(g, data, name)
-	} else if files := ebiten.DroppedFiles(); files != nil {
+		return
+	}
+	if files := ebiten.DroppedFiles(); files != nil {
 		if data, name, ok := firstFile(files); ok {
 			s.load(g, data, name)
 		}
 	}
-	return nil
 }
 
 // browseBtn is the phone-friendly alternative to drag-and-drop.
