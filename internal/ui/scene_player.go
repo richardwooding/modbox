@@ -135,6 +135,9 @@ func (s *playerScene) Update(g *Game) error {
 	s.handleDigitMutes()
 	s.handleTaps(g)
 	s.jukebox(g)
+	if g.scene != scene(s) {
+		return nil // jukebox advanced; this scene (and its player) is closed
+	}
 	if s.handleIncomingFile(g) {
 		return nil // replaced by a fresh player scene
 	}

@@ -29,7 +29,13 @@ func (s *dropScene) Update(g *Game) error {
 		return nil
 	}
 	s.handleKeys(g, demos)
+	if g.scene != scene(s) {
+		return nil // a song started; don't keep driving the stale scene
+	}
 	s.handleTaps(g, demos)
+	if g.scene != scene(s) {
+		return nil
+	}
 	s.handleIncomingFile(g)
 	return nil
 }
@@ -78,6 +84,9 @@ func (s *dropScene) handleTaps(g *Game, demos []modules.Demo) {
 		openFilePicker()
 	}
 	for _, pt := range taps {
+		if g.scene != scene(s) {
+			break // a song already started; further taps would leak players
+		}
 		i, ok := demoRowAt(pt, len(demos))
 		if !ok {
 			continue
