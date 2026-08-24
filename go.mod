@@ -1,6 +1,6 @@
 module github.com/richardwooding/modbox
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/gotracker/playback v1.5.0
