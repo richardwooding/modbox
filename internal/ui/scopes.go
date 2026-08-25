@@ -69,10 +69,7 @@ func drawScopes(dst *ebiten.Image, p *player.Player, nCh int, area rectF) {
 		}
 		mid := box.y + box.h/2
 		gain := box.h/2 - 6
-		step := scopeSamples / int(box.w-8)
-		if step < 1 {
-			step = 1
-		}
+		step := max(scopeSamples/int(box.w-8), 1)
 		var prevX, prevY float32
 		first := true
 		for i := 0; i < scopeSamples; i += step {

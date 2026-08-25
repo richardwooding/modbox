@@ -150,8 +150,8 @@ func buildInfo(sd song.Data, raw []byte) SongInfo {
 		InitialBPM:   sd.GetInitialBPM(),
 		InitialSpeed: sd.GetInitialTempo(),
 		PatternText:  map[int][][]string{},
-	}
-	info.Instruments = modnames.Names(raw)
+
+		Instruments: modnames.Names(raw)}
 	orders := sd.GetOrderList()
 	info.NumOrders = len(orders)
 	for _, pat := range orders {
@@ -345,10 +345,7 @@ func (p *Player) Stream() *pcmRing { return p.ring }
 
 // Snapshot returns the audible position and levels for this UI frame.
 func (p *Player) Snapshot() Snapshot {
-	playhead := p.ring.PlayheadSample() - p.LatencyOffset
-	if playhead < 0 {
-		playhead = 0
-	}
+	playhead := max(p.ring.PlayheadSample()-p.LatencyOffset, 0)
 	ev := p.states.AtSample(playhead)
 	speed := ev.speed
 	if speed == 0 {
@@ -421,10 +418,7 @@ func (p *Player) SeekOrder(delta int) {
 	if p.seek == nil {
 		return
 	}
-	target := int(p.curOrder.Load()) + delta
-	if target < 0 {
-		target = 0
-	}
+	target := max(int(p.curOrder.Load())+delta, 0)
 	if target >= p.Info.NumOrders {
 		target = p.Info.NumOrders - 1
 	}

@@ -77,7 +77,7 @@ func (ip *instrPanel) Draw(dst *ebiten.Image, info player.SongInfo, frame int64,
 
 	maxRows := (gridH - 28) / rowH
 	maxChars := (w - 20) / glyphW
-	for i := 0; i < maxRows; i++ {
+	for i := range maxRows {
 		idx := ip.scroll + i
 		if idx >= len(info.Instruments) {
 			break
